@@ -250,7 +250,7 @@ if ( ! class_exists( 'Wp_Temporary_Login_Without_Password_Admin' ) ) {
 			return;
 		}
 
-		if ( current_user_can( 'manage_options' ) && 'pending' === $one_click_status ) {
+		if ( current_user_can( apply_filters( 'tempadmin_user_cap', 'manage_options' ) ) && 'pending' === $one_click_status ) {
 			update_option( 'wtlwp_one_click_user_status', 'creating' );
 			self::create_one_click_user( );
 		}
@@ -268,7 +268,7 @@ if ( ! class_exists( 'Wp_Temporary_Login_Without_Password_Admin' ) ) {
 					empty( $_POST['wtlwp_data'] ) ||
 					empty( $_POST['wtlwp-nonce'] ) ||
 					( ! empty( $_POST['wtlwp_action'] ) && 'update' === sanitize_text_field( wp_unslash( $_POST['wtlwp_action'] ) ) ) ||
-					! current_user_can( 'manage_options' ) ||
+					! current_user_can( apply_filters( 'tempadmin_user_cap', 'manage_options' ) ) ||
 					! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['wtlwp-nonce'] ) ), 'wtlwp_generate_login_url' )
 				) {
 				return;
@@ -444,7 +444,7 @@ if ( ! class_exists( 'Wp_Temporary_Login_Without_Password_Admin' ) ) {
 		 */
 		public function update_tlwp_settings() {
 
-			if ( empty( $_POST['tlwp_settings_data'] ) || empty( $_POST['wtlwp-settings-nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['wtlwp-settings-nonce'] ) ), 'wtlwp_login_settings' ) || ! current_user_can( 'manage_options' ) ) {
+			if ( empty( $_POST['tlwp_settings_data'] ) || empty( $_POST['wtlwp-settings-nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['wtlwp-settings-nonce'] ) ), 'wtlwp_login_settings' ) || ! current_user_can( apply_filters( 'tempadmin_user_cap', 'manage_options' ) ) ) {
 				return;
 			}
 			
@@ -511,7 +511,7 @@ if ( ! class_exists( 'Wp_Temporary_Login_Without_Password_Admin' ) ) {
 			}
 
 			// Can manage Temporary Logins? If yes..go ahead
-			if ( ( false === Wp_Temporary_Login_Without_Password_Common::can_manage_wtlwp() ) || ! current_user_can( 'manage_options' ) ) {
+			if ( ( false === Wp_Temporary_Login_Without_Password_Common::can_manage_wtlwp() ) || ! current_user_can( apply_filters( 'tempadmin_user_cap', 'manage_options' ) ) ) {
 				return;
 			}
 
@@ -1104,7 +1104,7 @@ if ( ! class_exists( 'Wp_Temporary_Login_Without_Password_Admin' ) ) {
 
             check_ajax_referer( 'wtlwp_nonce', 'nonce' );
 
-			if ( ! current_user_can( 'manage_options' ) ) {
+			if ( ! current_user_can( apply_filters( 'tempadmin_user_cap', 'manage_options' ) ) ) {
 				wp_send_json_error(
 					array( 'message' => esc_html__( 'Permission denied.', 'temporary-login-without-password' ) )
 				);
