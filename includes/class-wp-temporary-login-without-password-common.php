@@ -112,7 +112,7 @@ if ( ! class_exists( 'Wp_Temporary_Login_Without_Password_Common' ) ) {
 
 			} else {
 
-				if ( is_multisite() && ! empty( $data['super_admin'] ) && 'on' === $data['super_admin'] ) {
+				if ( is_multisite() && is_super_admin() && ! empty( $data['super_admin'] ) && 'on' === $data['super_admin'] ) {
 
 					// Grant super admin access to this temporary users
 					grant_super_admin( $user_id );
@@ -164,7 +164,7 @@ if ( ! class_exists( 'Wp_Temporary_Login_Without_Password_Common' ) ) {
 		 */
 		public static function update_user( $user_id = 0, $data = array() ) {
 
-			if ( false === self::can_manage_wtlwp() || ( 0 === $user_id ) ) {
+			if ( false === self::can_manage_wtlwp() || ( 0 === $user_id ) || ! self::is_valid_temporary_login( $user_id, false ) ) {
 				return 0;
 			}
 
@@ -195,7 +195,7 @@ if ( ! class_exists( 'Wp_Temporary_Login_Without_Password_Common' ) ) {
 			}
 
 
-			if ( is_multisite() && ! empty( $data['super_admin'] ) && 'on' === $data['super_admin'] ) {
+			if ( is_multisite() && is_super_admin() && ! empty( $data['super_admin'] ) && 'on' === $data['super_admin'] ) {
 				grant_super_admin( $user_id );
 			}
 
@@ -789,6 +789,13 @@ if ( ! class_exists( 'Wp_Temporary_Login_Without_Password_Common' ) ) {
 			$manage_login = false;
 			if ( 'disable' === $action ) {
 				$manage_login = update_user_meta( $user_id, '_wtlwp_expire', self::get_current_gmt_timestamp() );
+
+				// Security: delete Application Passwords & destroy active session tokens upon revocation.
+				self::delete_user_application_passwords( $user_id );
+				if ( class_exists( 'WP_Session_Tokens' ) ) {
+					$sessions = WP_Session_Tokens::get_instance( $user_id );
+					$sessions->destroy_all();
+				}
 			} elseif ( 'enable' === $action ) {
 				$manage_login = update_user_meta( $user_id, '_wtlwp_expire', self::get_user_expire_time() );
 			}
@@ -897,6 +904,12 @@ if ( ! class_exists( 'Wp_Temporary_Login_Without_Password_Common' ) ) {
 				foreach ( $temporary_logins as $user ) {
 					if ( $user instanceof WP_User ) {
 						$user_id = $user->ID;
+
+						self::delete_user_application_passwords( $user_id );
+						if ( class_exists( 'WP_Session_Tokens' ) ) {
+							$sessions = WP_Session_Tokens::get_instance( $user_id );
+							$sessions->destroy_all();
+						}
 
 						wp_delete_user( $user_id ); // Delete User
 
@@ -1161,37 +1174,125 @@ if ( ! class_exists( 'Wp_Temporary_Login_Without_Password_Common' ) ) {
 		}
 
 		/**
-		 * Get pages
+		 * Render redirect destination dropdown options
 		 *
-		 * @param string $selected
+		 * @param string $selected Currently selected value
 		 *
 		 * @since 1.6.9
 		 */
 		public static function tlwp_dropdown_redirect_to( $selected = '' ) {
-
-			$pages = (array) get_pages();
-
-			array_unshift( $pages, array( 'ID' => 'home_page', 'post_title' => __( 'Website Home Page', 'temporary-login-without-password' ) ) );
-			array_unshift( $pages, array( 'ID' => 'system_default', 'post_title' => __( 'System Default', 'temporary-login-without-password' ) ) );
-			array_unshift( $pages, array( 'ID' => 'wp_dashboard', 'post_title' => __( 'Dashboard', 'temporary-login-without-password' ) ) );
-
+			
 			$r = '';
-			if ( count( $pages ) > 0 ) {
+    
+			// Add default redirect options
+			$r .= self::render_default_redirect_options( $selected );
+			
+			// Add pages
+			$r .= self::render_pages_options( $selected );
+			
+			// Add custom post types
+			if ( Wp_Temporary_Login_Without_Password::is_pro() ) {
+				$r .= Wp_Temporary_Login_Without_Password_Pro_Helpers::render_post_types_options( $selected );
+			}
+			
+			echo $r;
+		}
 
-				$r .= "<optgroup label='" . __( 'Pages', 'temporary-login-without-password' ) . "'>";
-				foreach ( $pages as $page ) {
-					$page = (array) $page;
-					// preselect specified role
-					if ( $selected == $page['ID'] ) {
-						$r .= "\n\t<option selected='selected' value='" . esc_attr( $page['ID'] ) . "'>" . $page['post_title'] . '</option>';
-					} else {
-						$r .= "\n\t<option value='" . esc_attr( $page['ID'] ) . "'>" . $page['post_title'] . '</option>';
-					}
+		/**
+		 * Render default redirect options
+		 *
+		 * @param string $selected Currently selected value
+		 * @return string HTML options
+		 * 
+		 * @since 1.6.9
+		 */
+		private static function render_default_redirect_options( $selected = '' ) {
+			$default_options = array(
+				array( 'ID' => 'wp_dashboard', 'post_title' => __( 'Dashboard', 'temporary-login-without-password' ) ),
+				array( 'ID' => 'system_default', 'post_title' => __( 'System Default', 'temporary-login-without-password' ) ),
+				array( 'ID' => 'home_page', 'post_title' => __( 'Website Home Page', 'temporary-login-without-password' ) ),
+			);
+			
+			$r = '';
+			foreach ( $default_options as $option ) {
+				$r .= self::render_redirect_option( $option['ID'], $option['post_title'], $selected );
+			}
+			
+			return $r;
+		}
+
+		/**
+		 * Render pages options with hierarchical indentation
+		 *
+		 * @param string $selected Currently selected value
+		 * @return string HTML options
+		 * 
+		 * @since 1.6.9
+		 */
+		private static function render_pages_options( $selected = '' ) {
+			$pages = get_pages();
+			
+			if ( empty( $pages ) ) {
+				return '';
+			}
+			
+			$is_pro = Wp_Temporary_Login_Without_Password::is_pro();
+			
+			$r = '';
+			
+			if ( $is_pro ) {
+				$r .= "<optgroup label='" . esc_attr__( 'Pages', 'temporary-login-without-password' ) . "'>";
+			}
+			
+			foreach ( $pages as $page ) {
+				if ( empty( $page->post_title ) ) {
+					continue;
 				}
+				$indent = self::get_page_hierarchical_indent( $page );
+				$r .= self::render_redirect_option( $page->ID, $indent . $page->post_title, $selected );
+			}
+			
+			if ( $is_pro ) {
 				$r .= '</optgroup>';
 			}
+			
+			return $r;
+		}
 
-			echo $r;
+		/**
+		 * Get hierarchical indentation for pages
+		 *
+		 * @param WP_Post $page Page object
+		 * @return string HTML entity spaces for indentation
+		 * 
+		 * @since 1.6.9
+		 */
+		private static function get_page_hierarchical_indent( $page ) {
+			if ( ! $page->post_parent ) {
+				return '';
+			}
+			
+			$level = count( get_post_ancestors( $page->ID ) );
+			return str_repeat( '&nbsp;&nbsp;&nbsp;', $level );
+		}
+
+		/**
+		 * Render a single option element
+		 *
+		 * @param int|string $value Option value
+		 * @param string     $label Option label
+		 * @param string     $selected Currently selected value
+		 * @return string HTML option element
+		 * 
+		 * @since 1.6.9
+		 */
+		public static function render_redirect_option( $value, $label, $selected = '' ) {
+			return sprintf(
+				"\n\t<option value='%s'%s>%s</option>",
+				esc_attr( $value ),
+				selected( $selected, $value, false ),
+				esc_html( $label )
+			);
 		}
 
 		/**
@@ -1389,6 +1490,38 @@ if ( ! class_exists( 'Wp_Temporary_Login_Without_Password_Common' ) ) {
 
 			return (int) $count;
 			
+		}
+
+		/**
+		 * Delete all application passwords for a specified user
+		 *
+		 * @param int $user_id
+		 */
+		public static function delete_user_application_passwords( $user_id = 0 ) {
+			if ( empty( $user_id ) ) {
+				return;
+			}
+
+			if ( class_exists( 'WP_Application_Passwords' ) && method_exists( 'WP_Application_Passwords', 'delete_all_application_passwords' ) ) {
+				WP_Application_Passwords::delete_all_application_passwords( $user_id );
+			}
+
+			delete_user_meta( $user_id, '_application_passwords' );
+		}
+
+		/**
+		 * Get plugin base name values.
+		 *
+		 * Returns the actual plugin base name (from constant or fallback)		
+		 *
+		 * @return array{ 0: string, 1: string } Array of [ $plugin_base_name, $default_base_name ].
+		 * @since 1.8.5
+		 */
+		public static function get_plugin_base_names() {
+			$default_base_name = 'temporary-login-without-password/temporary-login-without-password.php';
+			$plugin_base_name  = defined( 'WTLWP_PLUGIN_BASE_NAME' ) ? WTLWP_PLUGIN_BASE_NAME : $default_base_name;
+
+			return array( $plugin_base_name, $default_base_name );
 		}
 	}
 }
